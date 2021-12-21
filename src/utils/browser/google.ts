@@ -3,7 +3,7 @@ import { Browser, Page } from "puppeteer";
 // logging
 import logger from "../logger";
 
-// util
+// utils
 import { checkEnvironmentVariableExistences } from "../errors";
 import { fillTextInput } from "./shared";
 
@@ -65,9 +65,12 @@ export async function runLearningGoogleLogin(browser: Browser) {
 
   // wait for learning portal to load
   await loginPage.waitForFunction(
-    `(window.location.protocol + "//" + window.location.hostname) == '${process.env.LEARNING_URL_BASE}'`
+    `(window.location.protocol + "//" + window.location.hostname) === "${process.env.LEARNING_URL_BASE}"`
   );
   logger.debug("Logged in successfully!");
+
+  // return authed portal page for use by other utilities
+  return loginPage;
 }
 
 async function _clickGoogleLoginNextButton(page: Page) {
