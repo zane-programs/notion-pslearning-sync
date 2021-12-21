@@ -13,30 +13,31 @@ export async function waitForLearningPortal(page: Page) {
 
 export async function getClasses(page: Page) {
   const classes = await page.evaluate(async () => {
-    function extractClassesFromPortal(
-      resolve: (arr: number[]) => void,
-      reject: (error: Error) => void
-    ) {
-      document.addEventListener("DOMContentLoaded", () => {
-        const portalData = (window as any).PortalData;
+    function extractClassesFromPortal() {
+      return new Promise(
+        (resolve: (arr: number[]) => void, reject: (error: Error) => void) => {
+          document.addEventListener("DOMContentLoaded", () => {
+            const portalData = (window as any).PortalData;
 
-        // make sure that portal data is loaded
-        // if it's not, reject with an error
-        if (!portalData) {
-          reject(
-            new Error(
-              "PortalData variable missing from page; we might not be on the portal page"
-            )
-          );
+            // make sure that portal data is loaded
+            // if it's not, reject with an error
+            if (!portalData) {
+              reject(
+                new Error(
+                  "PortalData variable missing from page; we might not be on the portal page"
+                )
+              );
+            }
+
+            // cast class IDs array as number[] and return
+            resolve(portalData.currentClasses as number[]);
+          });
         }
-
-        // cast class IDs array as number[] and return
-        resolve(portalData.currentClasses as number[]);
-      });
+      );
     }
 
     // run extraction function above
-    return await new Promise(extractClassesFromPortal);
+    return await extractClassesFromPortal();
   });
 
   return classes;

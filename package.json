@@ -1,6 +1,6 @@
 {
   "name": "notion-pslearning-sync",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Sync PowerSchool Learning assignments with Notion calendar database",
   "main": "src/index.ts",
   "scripts": {
