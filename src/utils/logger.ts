@@ -1,8 +1,16 @@
-import winston from "winston";
+import { createLogger, format, transports } from "winston";
 
-const logger = winston.createLogger({
+const { combine, timestamp, prettyPrint, colorize, errors } = format;
+
+const logger = createLogger({
   level: process.env.NODE_ENV === "development" ? "debug" : "info",
-  format: winston.format.json(),
+  // format: format.json(),
+  format: combine(
+    errors({ stack: true }), // <-- use errors format
+    colorize(),
+    timestamp(),
+    prettyPrint(),
+  ),
   // defaultMeta: { service: "user-service" },
   transports: [
     // (not logging to files for the moment)
@@ -20,8 +28,8 @@ const logger = winston.createLogger({
 //
 if (process.env.NODE_ENV !== "production") {
   logger.add(
-    new winston.transports.Console({
-      format: winston.format.simple(),
+    new transports.Console({
+      format: format.simple(),
     })
   );
 }
