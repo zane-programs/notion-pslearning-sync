@@ -74,12 +74,9 @@ export async function getAssignmentsForWeek(
   const requestBody: string = convertToQueryString(bodyJson);
 
   const assignmentsHtml = await page.evaluate(
-    async (requestBody, learningUrlBase, username) => {
+    async (requestBody: string, learningUrlBase: string, username: string) => {
       // make sure we're on a valid page for making requests
-      if (
-        window.location.protocol + "//" + window.location.hostname !==
-        learningUrlBase
-      ) {
+      if (window.location.origin !== learningUrlBase) {
         throw new Error(
           "Cannot fetch assignments - not on a proper Learning page"
         );
@@ -95,10 +92,8 @@ export async function getAssignmentsForWeek(
         body: requestBody,
       });
 
-      const res = await req.text();
-
       // returning raw HTML for now
-      return res;
+      return await req.text();
     },
     requestBody,
     process.env.LEARNING_URL_BASE,
@@ -110,27 +105,88 @@ export async function getAssignmentsForWeek(
 
 // CSRF tokens are necessary for making API requests
 export async function getCSRFToken(page: Page) {
-  const csrfToken: string = await page.evaluate(async (learningUrlBase) => {
-    const token = (window as any).CSRFTOK;
+  const csrfToken: string = await page.evaluate(
+    async (learningUrlBase: string) => {
+      const token = (window as any).CSRFTOK;
 
-    // make sure we're on a valid page for making requests
-    if (
-      window.location.protocol + "//" + window.location.hostname !==
-        learningUrlBase || // page is not on proper learning host
-      !token // csrf token missing
-    ) {
-      throw new Error(
-        "Cannot fetch CSRF token - not on a proper Learning page with token"
-      );
-    }
+      // make sure we're on a valid page for making requests
+      if (
+        window.location.origin !== learningUrlBase || // page is not on proper learning host
+        !token // csrf token missing
+      ) {
+        throw new Error(
+          "Cannot fetch CSRF token - not on a proper Learning page with token"
+        );
+      }
 
-    return token;
-  }, process.env.LEARNING_URL_BASE);
+      return token;
+    },
+    process.env.LEARNING_URL_BASE
+  );
 
   // for debugging
   logger.debug("Got CSRF token: " + csrfToken);
 
   return csrfToken;
+}
+
+export async function getFullAssignmentInfo(
+  page: Page,
+  portalAssignmentInfo: PortalAssignmentInfo
+) {
+  const fullAssignmentHtml = await page.evaluate(
+    async (learningUrlBase: string, assignmentInfo: PortalAssignmentInfo) => {
+      // make sure we're on a Learning page for requests
+      if (window.location.origin !== learningUrlBase) {
+        throw new Error(
+          "Cannot fetch assignment - not on a proper Learning page"
+        );
+      }
+
+      const req = await fetch(assignmentInfo.link, {
+        method: "GET",
+        headers: {
+          "x-requested-with": "XMLHttpRequest",
+        },
+      });
+
+      // returns plain html
+      return await req.text();
+    },
+    process.env.LEARNING_URL_BASE,
+    portalAssignmentInfo as any // wouldn't accept PortalAssignmentInfo type, so had to cast to any
+  );
+
+  // load html into cheerio for parsing
+  const $ = cheerioLoad(fullAssignmentHtml);
+
+  // find element of the specific info table
+  const tableElement = $(`td.label.right:contains("Posted:")`).parents("table");
+
+  // total points element (used later)
+  const totalPointsText = tableElement
+    .find(`td.label.right:contains("Total Points:")`)
+    .siblings("td")
+    .text();
+
+  // sections (class sections, string)
+  const sectionsElement = tableElement
+    .find(`td.label.right:contains("Sections:")`)
+    .siblings("td"); // save for later use
+  const sections = sectionsElement.text();
+
+  // description
+  const descriptionElement = tableElement.find("tr").last().prev().find("td"); // found in second to last row
+  const description = descriptionElement.html(); // full html of description
+
+  // combine new info with portalAssignmentInfo
+  // and cast it all as FullAssignmentInfo
+  return {
+    ...portalAssignmentInfo,
+    description,
+    ...(sections && { sections }), // add sections if present
+    ...(totalPointsText && { totalPoints: parseFloat(totalPointsText) }), // add total points if present
+  } as FullAssignmentInfo;
 }
 
 // User information (also necessary for making some API requests)
@@ -141,13 +197,12 @@ export async function getUserInfo(page: Page): Promise<{
   login: string; // Learning username
   source_system_id: string;
 }> {
-  const userInfo = await page.evaluate(async (learningUrlBase) => {
+  const userInfo = await page.evaluate(async (learningUrlBase: string) => {
     const haikuContext = (window as any).HaikuContext;
 
     // make sure we're on a valid page for making requests
     if (
-      window.location.protocol + "//" + window.location.hostname !==
-        learningUrlBase || // page is not on proper learning host
+      window.location.origin !== learningUrlBase || // page is not on proper learning host
       !haikuContext?.user // user info missing
     ) {
       throw new Error(
@@ -161,7 +216,7 @@ export async function getUserInfo(page: Page): Promise<{
   return userInfo;
 }
 
-function _parseWeekAssignmentsResponse(html: string): WeekAssignmentInfo[] {
+function _parseWeekAssignmentsResponse(html: string): PortalAssignmentInfo[] {
   // load html into parser
   const $ = cheerioLoad(html);
 
@@ -185,7 +240,7 @@ function _parseWeekAssignmentsResponse(html: string): WeekAssignmentInfo[] {
 function _handleMapCalendarDay($: CheerioAPI) {
   // returns function using the $ (Cheerio) API provided above
   return function (this: CheerioElement) {
-    const linkElements = $(this).find(".item_description a");
+    const listItemElements = $(this).find(".list_item");
 
     // e.g. 2022-01-07
     const dayString = $(this)
@@ -193,50 +248,73 @@ function _handleMapCalendarDay($: CheerioAPI) {
       .replace("portlet_calendar_agenda_", "");
 
     // get assignment details from each link via map
-    const assignments = linkElements.map(_handleMapLinkElements($, dayString));
+    const assignments = listItemElements.map(
+      _handleMapListItemElements($, dayString)
+    );
 
     return assignments.toArray();
   };
 }
 
-function _handleMapLinkElements($: CheerioAPI, dayString: string) {
+function _handleMapListItemElements($: CheerioAPI, dayString: string) {
   return function (this: CheerioElement) {
     // e.g. 11:59pm
     const timeString = $(this)
-      .parent()
       .find(".item_description span.b.detail.small")
       .text();
 
-    const link = $(this).attr("href"); // e.g. /zneufeld/apmusictheoryzach21-22/assignment/view/28692071
-    const name = $(this).attr("title"); // e.g. TEST 4
+    // name of the class that the assignment is for
+    const className = $(this).find(".left a.filter").attr("atitle");
+
+    // element containing assignment link
+    const linkElement = $(this).find(".item_description a");
+
+    const link = linkElement.attr("href"); // e.g. /zneufeld/apmusictheoryzach21-22/assignment/view/28692071
+    const name = linkElement.attr("title"); // e.g. TEST 4
     // e.g. 2022-01-07 11:59pm (parsed as a Date object)
 
-    // get due date from given info
-    // TODO: cleanup!
-    const dueDateString = dayString + " " + timeString;
-    let dueDate = parseDate(dueDateString, "yyyy-MM-dd hh:mmaa", new Date());
-    // if date is invalid, try the other format
-    if (!isValidDate(dueDate)) {
-      dueDate = parseDate(dueDateString, "yyyy-MM-dd hhaa", new Date());
-      // check again -- if it could not be parsed, throw an error
-      if (!isValidDate(dueDate)) {
-        throw new Error(
-          "Assignment due date could not be parsed according to either format"
-        );
-      }
-    }
+    // get due date from dayString and timeString
+    const dueDate = _parseDueDate(dayString, timeString);
 
     return {
       name,
+      className,
       link,
       dueDate,
-    } as WeekAssignmentInfo;
+    } as PortalAssignmentInfo;
   };
 }
 
+function _parseDueDate(dayString: string, timeString: string) {
+  // concatenate dayString and timeString for parsing
+  const dueDateString = dayString + " " + timeString;
+
+  // try parsing with first format
+  let dueDate = parseDate(dueDateString, "yyyy-MM-dd hh:mmaa", new Date());
+  // if date is invalid, try the other format
+  if (!isValidDate(dueDate)) {
+    dueDate = parseDate(dueDateString, "yyyy-MM-dd hhaa", new Date());
+    // check again -- if it could not be parsed, throw an error
+    if (!isValidDate(dueDate)) {
+      throw new Error(
+        "Assignment due date could not be parsed according to either format"
+      );
+    }
+  }
+
+  return dueDate;
+}
+
 // type for Learning assignments from /u/{username}/portal/portlet_calendar_week
-export interface WeekAssignmentInfo {
+export interface PortalAssignmentInfo {
   name: string; // assignment name
+  className: string; // name of the class that the assignment is for
   link: string; // assignment link
   dueDate: Date; // when assignment is due
+}
+
+export interface FullAssignmentInfo extends PortalAssignmentInfo {
+  description: string; // html of assignment (e.g. "<p>Description here</p>")
+  sections?: string; //    class sections assigned (e.g. "All")
+  totalPoints?: number; // total number of points (e.g. 100)
 }

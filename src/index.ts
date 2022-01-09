@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer-extra";
+import { Client } from "@notionhq/client";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { config as dotenvConfig } from "dotenv";
 
@@ -11,9 +12,11 @@ import {
   getAssignmentsForWeek,
   getClasses,
   getCSRFToken,
+  getFullAssignmentInfo,
   getUserInfo,
   waitForLearningPortal,
 } from "./utils/browser/learning";
+import { writeAssignmentsToNotion } from "./utils/notion";
 
 // get env variables from .env
 dotenvConfig();
@@ -26,6 +29,9 @@ const isDev = process.env.NODE_ENV === "development";
 
 (async function main() {
   try {
+    // init notion client
+    const notion = new Client({ auth: process.env.NOTION_TOKEN });
+
     // create puppeteer browser
     const browser = await puppeteer.launch({
       headless: !isDev,
@@ -48,42 +54,34 @@ const isDev = process.env.NODE_ENV === "development";
     const csrfToken = await getCSRFToken(learningPage); // csrf token for api requests
     const userInfo = await getUserInfo(learningPage); // user info, also for api requests
 
-    logger.info(
-      "ASSIGNMENTS NOW\n" +
-        JSON.stringify(
-          await getAssignmentsForWeek(
-            learningPage,
-            csrfToken,
-            userInfo.login,
-            classes
-          ),
-          null,
-          2
-        )
+    const dec11Assignments = await getAssignmentsForWeek(
+      learningPage,
+      csrfToken,
+      userInfo.login,
+      classes
+      // new Date("December 11, 2021")
+    );
+
+    const dec11AssignmentsFull = await Promise.all(
+      dec11Assignments.map(async (assignmentInfo) =>
+        getFullAssignmentInfo(learningPage, assignmentInfo)
+      )
     );
 
     logger.info(
-      "ASSIGNMENTS DEC 11 2021 \n\n" +
-        JSON.stringify(
-          await getAssignmentsForWeek(
-            learningPage,
-            csrfToken,
-            userInfo.login,
-            classes,
-            new Date("December 11, 2021")
-          ),
-          null,
-          2
-        )
+      "DEC 11 FULL\n" + JSON.stringify(dec11AssignmentsFull, null, 2)
     );
 
-    // in production, close browser once information is retrieved
-    if (process.env.NODE_ENV !== "development") {
+    // close browser once work is done
       await browser.close();
-    }
+
+    // write to notion
+    await writeAssignmentsToNotion(notion, dec11AssignmentsFull);
   } catch (e) {
     // log error and end process
-    logger.error(e?.message || e || "Unknown error");
+    // TEMPORARILY replacing winston w/ console.error here
+    // logger.error(e?.message || e || "Unknown error");
+    console.error(e);
     // TODO: make error exit codes more specific (?)
     process.exit(1);
   }

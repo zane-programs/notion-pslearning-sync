@@ -19,13 +19,16 @@ export async function runLearningGoogleLogin(browser: Browser) {
   const loginPage = await browser.newPage();
 
   // initialize google login with powerschool
+  const organizationDomainInfo = process.env.GOOGLE_ORGANIZATION_DOMAIN
+    ? "?google_domain=" + process.env.GOOGLE_ORGANIZATION_DOMAIN
+    : "";
   const googleBeginUrl =
     process.env.LEARNING_URL_BASE +
     "/do/authentication/google/google_begin" +
-    (process.env.GOOGLE_ORGANIZATION_DOMAIN
-      ? "?google_domain=" + process.env.GOOGLE_ORGANIZATION_DOMAIN
-      : "");
+    organizationDomainInfo;
   logger.debug("Google Begin URL: " + googleBeginUrl);
+
+  // go to login page
   await loginPage.goto(googleBeginUrl);
 
   // check for accounts.google.com login page
